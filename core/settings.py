@@ -155,6 +155,7 @@ DJOSER = {
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',   # React dev server (Vite)
 ]
+CORS_ALLOW_ALL_ORIGINS = True  # dev only — tighten in production
 
 # ── Channels (WebSocket) ──────────────────────────
 ASGI_APPLICATION = 'core.asgi.application'
