@@ -96,3 +96,4 @@ class UserSearchView(generics.ListAPIView):
         return User.objects.filter(
             Q(name__icontains=query) | Q(email__icontains=query)
         ).exclude(id=self.request.user.id)
+        

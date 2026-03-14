@@ -9,4 +9,6 @@ urlpatterns = [
     path('api/auth/', include('djoser.urls')),
     path('api/auth/', include('djoser.urls.jwt')),
     path('api/',      include('users.urls')),
+    path('api/',      include('videos.urls')),
+    path('api/',      include('rooms.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
