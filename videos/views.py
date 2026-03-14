@@ -8,6 +8,7 @@ from .models import Video
 from .serializers import VideoSerializer, VideoUploadSerializer, VideoUpdateSerializer
 from .services import upload_to_r2
 from .tasks import transcode_video
+from django.db import transaction
 
 
 class VideoListCreateView(APIView):
@@ -50,7 +51,7 @@ class VideoListCreateView(APIView):
         video.save()
 
         # Fire Celery task — non-blocking
-        transcode_video.delay(str(video.id))
+        transaction.on_commit(lambda: transcode_video.delay(str(video.id)))
 
         return Response(
             VideoSerializer(video, context={'request': request}).data,
