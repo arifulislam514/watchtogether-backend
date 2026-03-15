@@ -1,37 +1,43 @@
 # videos/views.py
-from rest_framework import generics, permissions, status
+import os
+import shutil
+from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
+from django.conf import settings
+from django.db import transaction
 from .models import Video
 from .serializers import VideoSerializer, VideoUploadSerializer, VideoUpdateSerializer
 from .services import upload_to_r2
 from .tasks import transcode_video
-from django.db import transaction
+
+
+def delete_video_files(video):
+    """Delete all files associated with a video from local storage or R2"""
+    video_dir = os.path.join(settings.MEDIA_ROOT, 'videos', str(video.id))
+    if os.path.exists(video_dir):
+        shutil.rmtree(video_dir)
 
 
 class VideoListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    parser_classes     = [MultiPartParser, FormParser]  # needed for file uploads
+    parser_classes     = [MultiPartParser, FormParser]
 
     def get(self, request):
-        """GET /api/videos/ — list current user's videos"""
         videos = Video.objects.filter(owner=request.user)
-        serializer = VideoSerializer(videos, many=True, context={'request': request})
-        return Response(serializer.data)
+        return Response(VideoSerializer(videos, many=True, context={'request': request}).data)
 
     def post(self, request):
-        """POST /api/videos/ — upload a new video"""
         serializer = VideoUploadSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        file  = serializer.validated_data['file']
-        title = serializer.validated_data['title']
+        file        = serializer.validated_data['file']
+        title       = serializer.validated_data['title']
         description = serializer.validated_data.get('description', '')
 
-        # Create video record immediately with status=uploading
         video = Video.objects.create(
             owner=request.user,
             title=title,
@@ -41,16 +47,13 @@ class VideoListCreateView(APIView):
             status='uploading',
         )
 
-        # Upload original to R2
-        key = f"videos/{video.id}/original.{video.format}"
+        key          = f"videos/{video.id}/original.{video.format}"
         original_url = upload_to_r2(file, key)
 
-        # Update video with URL and trigger background transcoding
         video.original_url = original_url
-        video.status = 'processing'
+        video.status       = 'processing'
         video.save()
 
-        # Fire Celery task — non-blocking
         transaction.on_commit(lambda: transcode_video.delay(str(video.id)))
 
         return Response(
@@ -66,13 +69,11 @@ class VideoDetailView(APIView):
         return get_object_or_404(Video, pk=pk, owner=user)
 
     def get(self, request, pk):
-        """GET /api/videos/{id}/ — get video detail + status polling"""
         video = self.get_object(pk, request.user)
         return Response(VideoSerializer(video, context={'request': request}).data)
 
     def patch(self, request, pk):
-        """PATCH /api/videos/{id}/ — update title or description"""
-        video = self.get_object(pk, request.user)
+        video      = self.get_object(pk, request.user)
         serializer = VideoUpdateSerializer(video, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -80,8 +81,9 @@ class VideoDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
-        """DELETE /api/videos/{id}/ — delete video"""
         video = self.get_object(pk, request.user)
+        # ✅ Delete all files from disk before removing DB record
+        delete_video_files(video)
         video.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
     
