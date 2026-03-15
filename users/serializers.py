@@ -18,8 +18,10 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = User
-        fields = ('id', 'email', 'name', 'avatar', 'friends_count', 'created_at')
-        read_only_fields = ('id', 'email', 'created_at')
+        fields = (
+            'id', 'email', 'name', 'avatar','is_staff','is_active','friends_count', 'created_at'
+        )
+        read_only_fields = ('id', 'email', 'is_staff', 'is_active', 'created_at')
 
     def get_friends_count(self, obj):
         return FriendRequest.objects.filter(
