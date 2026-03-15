@@ -1,5 +1,6 @@
 # videos/tasks.py
 import os
+import json
 import subprocess
 import tempfile
 import shutil
@@ -45,7 +46,7 @@ def download_file(url, destination):
 
 def upload_hls_files(video_id, temp_dir):
     """
-    Uploads all HLS files (.m3u8 and .ts) to storage.
+    Uploads all HLS files (.m3u8, .ts, .vtt) to storage.
     Returns master_url and dict of resolution URLs.
     """
     is_local = settings.R2_ENDPOINT_URL.startswith('https://your-account')
@@ -62,10 +63,14 @@ def upload_hls_files(video_id, temp_dir):
                 shutil.copy2(file_path, dest)
             else:
                 client = get_r2_client()
-                content_type = (
-                    'application/vnd.apple.mpegurl'
-                    if filename.endswith('.m3u8') else 'video/mp2t'
-                )
+                if filename.endswith('.m3u8'):
+                    content_type = 'application/vnd.apple.mpegurl'
+                elif filename.endswith('.ts'):
+                    content_type = 'video/mp2t'
+                elif filename.endswith('.vtt'):
+                    content_type = 'text/vtt'
+                else:
+                    content_type = 'application/octet-stream'
                 client.upload_file(
                     file_path,
                     settings.R2_BUCKET_NAME,
@@ -106,14 +111,221 @@ def get_video_duration(input_path):
         return 0
 
 
+def get_audio_streams(input_path):
+    """Returns list of audio streams with index, language, and title."""
+    result = subprocess.run([
+        'ffprobe', '-v', 'error',
+        '-select_streams', 'a',
+        '-show_entries', 'stream=index:stream_tags=language,title',
+        '-of', 'json',
+        input_path
+    ], capture_output=True, text=True)
+    try:
+        return json.loads(result.stdout).get('streams', [])
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
+def get_subtitle_streams(input_path):
+    """
+    Returns text-based subtitle streams only.
+    Skips image-based subtitles (PGS, DVD) that cannot be converted to WebVTT.
+    """
+    TEXT_SUBTITLE_CODECS = {'subrip', 'ass', 'ssa', 'mov_text', 'webvtt', 'srt', 'text'}
+
+    result = subprocess.run([
+        'ffprobe', '-v', 'error',
+        '-select_streams', 's',
+        '-show_entries', 'stream=index,codec_name:stream_tags=language,title',
+        '-of', 'json',
+        input_path
+    ], capture_output=True, text=True)
+    try:
+        streams = json.loads(result.stdout).get('streams', [])
+        return [s for s in streams if s.get('codec_name', '') in TEXT_SUBTITLE_CODECS]
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
+def _unique_lang_dir(lang_raw, lang_counts):
+    """Returns a unique directory name for a language, handling duplicates."""
+    lang = lang_raw.lower() or 'und'
+    count = lang_counts.get(lang, 0)
+    lang_counts[lang] = count + 1
+    return lang if count == 0 else f"{lang}{count}"
+
+
+def transcode_audio_renditions(input_path, output_dir, audio_streams):
+    """
+    Creates audio-only HLS renditions for each audio stream.
+    Returns list of rendition dicts: {lang, name, lang_dir, is_default}
+    """
+    renditions = []
+    lang_counts = {}
+
+    for i, stream in enumerate(audio_streams):
+        tags     = stream.get('tags', {})
+        raw_lang = tags.get('language', '').strip()
+        name     = tags.get('title', '').strip() or (raw_lang.upper() if raw_lang else f'Track {i + 1}')
+        lang_dir = _unique_lang_dir(raw_lang or f'track{i}', lang_counts)
+
+        audio_dir = os.path.join(output_dir, 'audio', lang_dir)
+        os.makedirs(audio_dir, exist_ok=True)
+
+        cmd = [
+            'ffmpeg', '-i', input_path,
+            '-map', f'0:a:{i}',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-f', 'hls',
+            '-hls_time', '6',
+            '-hls_playlist_type', 'vod',
+            '-hls_segment_filename', os.path.join(audio_dir, 'segment%03d.ts'),
+            os.path.join(audio_dir, 'playlist.m3u8'),
+            '-y'
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning(f"Audio rendition failed for stream {i}: {result.stderr[-300:]}")
+            shutil.rmtree(audio_dir, ignore_errors=True)
+            continue
+
+        renditions.append({
+            'lang':     raw_lang or f'und{i}',
+            'name':     name,
+            'lang_dir': lang_dir,
+            'is_default': i == 0,
+        })
+        logger.info(f"Audio rendition created: {name} ({raw_lang})")
+
+    return renditions
+
+
+def transcode_subtitle_renditions(input_path, output_dir, subtitle_streams, duration):
+    """
+    Extracts subtitle streams to WebVTT and wraps each in a single-segment
+    HLS playlist (simplest approach compatible with hls.js).
+    Returns list of rendition dicts: {lang, name, lang_dir, is_default}
+    """
+    renditions = []
+    lang_counts = {}
+
+    for i, stream in enumerate(subtitle_streams):
+        tags     = stream.get('tags', {})
+        raw_lang = tags.get('language', '').strip()
+        name     = tags.get('title', '').strip() or (raw_lang.upper() if raw_lang else f'Sub {i + 1}')
+        lang_dir = _unique_lang_dir(raw_lang or f'sub{i}', lang_counts)
+
+        sub_dir  = os.path.join(output_dir, 'subtitles', lang_dir)
+        os.makedirs(sub_dir, exist_ok=True)
+        vtt_path = os.path.join(sub_dir, 'subtitle.vtt')
+
+        cmd = [
+            'ffmpeg', '-i', input_path,
+            '-map', f'0:s:{i}',
+            '-c:s', 'webvtt',
+            vtt_path, '-y'
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning(f"Subtitle extraction failed for stream {i}: {result.stderr[-300:]}")
+            shutil.rmtree(sub_dir, ignore_errors=True)
+            continue
+
+        # Single-segment HLS subtitle playlist — hls.js loads the full VTT as one segment
+        playlist = (
+            '#EXTM3U\n'
+            '#EXT-X-TARGETDURATION:99999\n'
+            '#EXT-X-VERSION:3\n'
+            f'#EXTINF:{duration:.3f},\n'
+            'subtitle.vtt\n'
+            '#EXT-X-ENDLIST\n'
+        )
+        with open(os.path.join(sub_dir, 'playlist.m3u8'), 'w') as f:
+            f.write(playlist)
+
+        renditions.append({
+            'lang':     raw_lang or f'und{i}',
+            'name':     name,
+            'lang_dir': lang_dir,
+            'is_default': False,
+        })
+        logger.info(f"Subtitle rendition created: {name} ({raw_lang})")
+
+    return renditions
+
+
+def build_master_playlist(output_dir, audio_renditions, subtitle_renditions, has_embedded_audio):
+    """
+    Builds master.m3u8 with:
+    - #EXT-X-MEDIA entries for audio renditions (when multi-audio)
+    - #EXT-X-MEDIA entries for subtitle renditions
+    - #EXT-X-STREAM-INF for each video resolution
+    """
+    lines = ['#EXTM3U', '#EXT-X-VERSION:3', '']
+
+    has_audio_group = bool(audio_renditions)
+    has_sub_group   = bool(subtitle_renditions)
+
+    # ── Audio rendition entries ────────────────────────────────
+    if has_audio_group:
+        for r in audio_renditions:
+            lines.append(
+                f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",'
+                f'LANGUAGE="{r["lang"]}",'
+                f'NAME="{r["name"]}",'
+                f'DEFAULT={"YES" if r["is_default"] else "NO"},'
+                f'AUTOSELECT=YES,'
+                f'URI="audio/{r["lang_dir"]}/playlist.m3u8"'
+            )
+        lines.append('')
+
+    # ── Subtitle rendition entries ─────────────────────────────
+    if has_sub_group:
+        for r in subtitle_renditions:
+            lines.append(
+                f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",'
+                f'LANGUAGE="{r["lang"]}",'
+                f'NAME="{r["name"]}",'
+                f'DEFAULT={"YES" if r["is_default"] else "NO"},'
+                f'AUTOSELECT=YES,'
+                f'URI="subtitles/{r["lang_dir"]}/playlist.m3u8"'
+            )
+        lines.append('')
+
+    # ── Video stream entries ───────────────────────────────────
+    streams = [
+        ('360p',  800_000,   '640x360'),
+        ('720p',  2_500_000, '1280x720'),
+        ('1080p', 5_000_000, '1920x1080'),
+    ]
+
+    for label, bandwidth, resolution in streams:
+        attrs = [f'BANDWIDTH={bandwidth}', f'RESOLUTION={resolution}']
+        if has_audio_group:
+            attrs.append('AUDIO="audio"')
+        if has_sub_group:
+            attrs.append('SUBTITLES="subs"')
+        lines.append(f'#EXT-X-STREAM-INF:{",".join(attrs)}')
+        lines.append(f'{label}/playlist.m3u8')
+
+    with open(os.path.join(output_dir, 'master.m3u8'), 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
+    logger.info("Master playlist created with audio/subtitle groups")
+
+
 @shared_task(bind=True, max_retries=3)
 def transcode_video(self, video_id):
     """
     Main Celery task:
     1. Download original video
-    2. Transcode to HLS at 360p, 720p, 1080p using FFmpeg
-    3. Upload all segments to storage
-    4. Update Video model with URLs and status=ready
+    2. Probe audio and subtitle streams
+    3. Transcode video resolutions (video-only for multi-audio, video+audio for single-audio)
+    4. Create audio renditions (multi-audio only)
+    5. Extract subtitle renditions (all text-based subtitle streams)
+    6. Build master.m3u8 with proper #EXT-X-MEDIA groups
+    7. Upload all files to storage
+    8. Update Video model with URLs and status=ready
     """
     logger.info(f"Starting transcoding for video: {video_id}")
 
@@ -124,41 +336,60 @@ def transcode_video(self, video_id):
         video.status = 'processing'
         video.save()
 
-        # Create temp working directory
         temp_dir   = tempfile.mkdtemp(prefix=f'transcode_{video_id}_')
         input_path = os.path.join(temp_dir, f'original.{video.format}')
         output_dir = os.path.join(temp_dir, 'hls')
         os.makedirs(output_dir, exist_ok=True)
 
         try:
-            # ── Step 1: Download original ──────────────────────
+            # ── Step 1: Download original ──────────────────────────
             logger.info("Downloading original video...")
             download_file(video.original_url, input_path)
 
-            # ── Step 2: Get duration ───────────────────────────
+            # ── Step 2: Get duration ───────────────────────────────
             duration = get_video_duration(input_path)
             video.duration = duration
             video.save()
             logger.info(f"Video duration: {duration}s")
 
-            # ── Step 3: FFmpeg — 3 separate commands ───────────
+            # ── Step 3: Probe audio & subtitle streams ─────────────
+            audio_streams    = get_audio_streams(input_path)
+            subtitle_streams = get_subtitle_streams(input_path)
+            is_multi_audio   = len(audio_streams) > 1
+
+            logger.info(
+                f"Streams found: {len(audio_streams)} audio "
+                f"({'multi' if is_multi_audio else 'single'}), "
+                f"{len(subtitle_streams)} subtitle"
+            )
+
+            # ── Step 4: Transcode video resolutions ────────────────
             resolutions = [
-                ('360p',  '640x360',   '800k',  '128k'),
-                ('720p',  '1280x720',  '2500k', '128k'),
-                ('1080p', '1920x1080', '5000k', '128k'),
+                ('360p',  '640x360',   '800k'),
+                ('720p',  '1280x720',  '2500k'),
+                ('1080p', '1920x1080', '5000k'),
             ]
 
-            for label, size, vbitrate, abitrate in resolutions:
+            for label, size, vbitrate in resolutions:
                 res_dir = os.path.join(output_dir, label)
                 os.makedirs(res_dir, exist_ok=True)
 
                 cmd = [
                     'ffmpeg', '-i', input_path,
+                    '-map', '0:v:0',
                     '-vf', f'scale={size}',
                     '-c:v', 'libx264',
                     '-b:v', vbitrate,
-                    '-c:a', 'aac',
-                    '-b:a', abitrate,
+                ]
+
+                if is_multi_audio:
+                    # Video-only — audio comes from separate rendition playlists
+                    cmd += ['-an']
+                else:
+                    # Embed the single audio track directly (simpler, no extra renditions)
+                    cmd += ['-c:a', 'aac', '-b:a', '128k']
+
+                cmd += [
                     '-f', 'hls',
                     '-hls_time', '6',
                     '-hls_playlist_type', 'vod',
@@ -168,33 +399,36 @@ def transcode_video(self, video_id):
                 ]
 
                 result = subprocess.run(cmd, capture_output=True, text=True)
-
                 if result.returncode != 0:
                     raise Exception(f'FFmpeg failed for {label}: {result.stderr[-500:]}')
 
                 logger.info(f"Transcoded {label} successfully")
 
-            # ── Step 4: Create master.m3u8 manually ───────────
-            master_content = """#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
-360p/playlist.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720
-720p/playlist.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080
-1080p/playlist.m3u8
-"""
-            master_path = os.path.join(output_dir, 'master.m3u8')
-            with open(master_path, 'w') as f:
-                f.write(master_content.strip())
+            # ── Step 5: Audio renditions (multi-audio only) ────────
+            audio_renditions = []
+            if is_multi_audio:
+                audio_renditions = transcode_audio_renditions(
+                    input_path, output_dir, audio_streams
+                )
 
-            logger.info("Master playlist created")
+            # ── Step 6: Subtitle renditions ────────────────────────
+            subtitle_renditions = transcode_subtitle_renditions(
+                input_path, output_dir, subtitle_streams, duration
+            )
 
-            # ── Step 5: Upload all HLS files to storage ────────
+            # ── Step 7: Build master.m3u8 ──────────────────────────
+            build_master_playlist(
+                output_dir,
+                audio_renditions,
+                subtitle_renditions,
+                has_embedded_audio=not is_multi_audio,
+            )
+
+            # ── Step 8: Upload all HLS files to storage ────────────
             logger.info("Uploading HLS files to storage...")
             master_url, resolution_urls = upload_hls_files(video_id, output_dir)
 
-            # ── Step 6: Update Video model ─────────────────────
+            # ── Step 9: Update Video model ─────────────────────────
             video.master_url = master_url
             video.url_360p   = resolution_urls['360p']
             video.url_720p   = resolution_urls['720p']
@@ -205,7 +439,6 @@ def transcode_video(self, video_id):
             logger.info(f"Transcoding complete for video: {video_id}")
 
         finally:
-            # Always clean up temp files regardless of success or failure
             shutil.rmtree(temp_dir, ignore_errors=True)
             logger.info("Temp files cleaned up")
 
@@ -221,4 +454,3 @@ def transcode_video(self, video_id):
         except Video.DoesNotExist:
             pass
         raise self.retry(exc=exc, countdown=60)
-    
