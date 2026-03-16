@@ -15,11 +15,30 @@ from .tasks import transcode_video
 
 
 def delete_video_files(video):
-    """Delete all files associated with a video from local storage or R2"""
-    video_dir = os.path.join(settings.MEDIA_ROOT, 'videos', str(video.id))
-    if os.path.exists(video_dir):
-        shutil.rmtree(video_dir)
+    """Delete all video files — R2 or local."""
+    import os, shutil
+    from videos.services import get_r2_client
 
+    is_local = settings.R2_ENDPOINT_URL.startswith('https://your-account')
+
+    if is_local:
+        video_dir = os.path.join(settings.MEDIA_ROOT, 'videos', str(video.id))
+        if os.path.exists(video_dir):
+            shutil.rmtree(video_dir)
+    else:
+        # Delete all R2 objects with this video's prefix
+        client = get_r2_client()
+        prefix = f"videos/{video.id}/"
+        response = client.list_objects_v2(
+            Bucket=settings.R2_BUCKET_NAME,
+            Prefix=prefix
+        )
+        objects = response.get('Contents', [])
+        if objects:
+            client.delete_objects(
+                Bucket=settings.R2_BUCKET_NAME,
+                Delete={'Objects': [{'Key': o['Key']} for o in objects]}
+            )
 
 class VideoListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]

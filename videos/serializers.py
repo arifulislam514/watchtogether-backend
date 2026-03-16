@@ -4,7 +4,6 @@ from .models import Video
 
 
 class VideoUploadSerializer(serializers.ModelSerializer):
-    """Used for POST — uploading a new video"""
     file = serializers.FileField(write_only=True)
 
     class Meta:
@@ -12,21 +11,40 @@ class VideoUploadSerializer(serializers.ModelSerializer):
         fields = ('id', 'title', 'description', 'file')
 
     def validate_file(self, value):
-        # Check format
-        allowed_formats = ['video/mp4', 'video/x-matroska']
-        if value.content_type not in allowed_formats:
-            raise serializers.ValidationError('Only mp4 and mkv files are allowed.')
+        # ✅ Check by extension as well — browsers send inconsistent
+        # content types for MKV (video/x-matroska, video/mkv,
+        # application/octet-stream, or even video/webm on some browsers)
+        name = value.name.lower()
+        allowed_extensions = ('.mp4', '.mkv')
+        allowed_mimetypes  = (
+            'video/mp4',
+            'video/x-matroska',  # standard MKV
+            'video/mkv',         # non-standard but common
+            'video/webm',        # some browsers report MKV as webm
+            'application/octet-stream',  # generic binary (check ext instead)
+        )
+
+        ext_ok  = name.endswith(allowed_extensions)
+        mime_ok = value.content_type in allowed_mimetypes
+
+        if not ext_ok and not mime_ok:
+            raise serializers.ValidationError(
+                'Only mp4 and mkv files are allowed.'
+            )
+
+        if not ext_ok:
+            raise serializers.ValidationError(
+                'Only .mp4 and .mkv file extensions are allowed.'
+            )
 
         # Check size — 4GB max
-        max_size = 4 * 1024 * 1024 * 1024
-        if value.size > max_size:
+        if value.size > 4 * 1024 * 1024 * 1024:
             raise serializers.ValidationError('File size must be under 4GB.')
 
         return value
 
 
 class VideoSerializer(serializers.ModelSerializer):
-    """Used for GET — reading video data"""
     owner_name = serializers.CharField(source='owner.name', read_only=True)
 
     class Meta:
@@ -46,8 +64,6 @@ class VideoSerializer(serializers.ModelSerializer):
 
 
 class VideoUpdateSerializer(serializers.ModelSerializer):
-    """Used for PATCH — only allow title and description updates"""
     class Meta:
         model  = Video
         fields = ('title', 'description')
-        

@@ -1,36 +1,36 @@
 # videos/services.py
-import os
-import shutil
+import boto3
+from botocore.config import Config
 from django.conf import settings
 
 
+def get_r2_client():
+    return boto3.client(
+        's3',
+        endpoint_url=settings.R2_ENDPOINT_URL,
+        aws_access_key_id=settings.R2_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+        config=Config(signature_version='s3v4'),
+        region_name='auto',
+    )
+
+
 def upload_to_r2(file_obj, key):
-    """
-    LOCAL STORAGE (development only).
-    Saves file to media/ folder instead of Cloudflare R2.
-    Replace this entire function with R2 logic when ready.
-    """
-    # Build local path mirroring the R2 key structure
-    local_path = os.path.join(settings.MEDIA_ROOT, key)
-
-    # Create directories if they don't exist
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-
-    # Save the file
-    with open(local_path, 'wb') as destination:
-        for chunk in file_obj.chunks():
-            destination.write(chunk)
-
-    # Return a local URL that Django can serve
-    return f"{settings.MEDIA_URL}{key}"
+    """Upload a file to Cloudflare R2. Returns public URL."""
+    client = get_r2_client()
+    client.upload_fileobj(
+        file_obj,
+        settings.R2_BUCKET_NAME,
+        key,
+        ExtraArgs={
+            'ContentType': getattr(file_obj, 'content_type', 'application/octet-stream')
+        }
+    )
+    return f"{settings.R2_PUBLIC_URL}/{key}"
 
 
 def delete_from_r2(key):
-    """
-    LOCAL STORAGE (development only).
-    Deletes file from media/ folder.
-    """
-    local_path = os.path.join(settings.MEDIA_ROOT, key)
-    if os.path.exists(local_path):
-        os.remove(local_path)
-        
+    """Delete a file from Cloudflare R2."""
+    client = get_r2_client()
+    client.delete_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+    

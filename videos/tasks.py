@@ -27,28 +27,33 @@ def get_r2_client():
 
 def download_file(url, destination):
     """
-    Downloads a file from a URL or copies from local media folder.
-    Handles both local (development) and R2 (production) URLs.
+    Downloads original video from R2 public URL or local media.
     """
     if url.startswith('/media/'):
+        # Legacy local file
+        import os
         local_path = os.path.join(
             settings.MEDIA_ROOT,
             url.replace('/media/', '', 1)
         )
         shutil.copy2(local_path, destination)
     else:
+        # R2 public URL — stream download
         import requests
         response = requests.get(url, stream=True)
+        response.raise_for_status()
         with open(destination, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
                 f.write(chunk)
 
 
+
+
 def upload_hls_files(video_id, temp_dir):
-    """
-    Uploads all HLS files (.m3u8, .ts, .vtt) to storage.
-    Returns master_url and dict of resolution URLs.
-    """
+    """Upload all HLS files to R2. Returns master_url and resolution URLs."""
+    from videos.services import get_r2_client
+
+    client   = get_r2_client()
     is_local = settings.R2_ENDPOINT_URL.startswith('https://your-account')
 
     for root, dirs, files in os.walk(temp_dir):
@@ -62,7 +67,6 @@ def upload_hls_files(video_id, temp_dir):
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.copy2(file_path, dest)
             else:
-                client = get_r2_client()
                 if filename.endswith('.m3u8'):
                     content_type = 'application/vnd.apple.mpegurl'
                 elif filename.endswith('.ts'):
@@ -71,6 +75,7 @@ def upload_hls_files(video_id, temp_dir):
                     content_type = 'text/vtt'
                 else:
                     content_type = 'application/octet-stream'
+
                 client.upload_file(
                     file_path,
                     settings.R2_BUCKET_NAME,
@@ -86,7 +91,7 @@ def upload_hls_files(video_id, temp_dir):
             '1080p': f"/media/videos/{video_id}/hls/1080p/playlist.m3u8",
         }
     else:
-        base = f"{settings.R2_ENDPOINT_URL}/{settings.R2_BUCKET_NAME}"
+        base = settings.R2_PUBLIC_URL
         master_url = f"{base}/videos/{video_id}/hls/master.m3u8"
         urls = {
             '360p':  f"{base}/videos/{video_id}/hls/360p/playlist.m3u8",
