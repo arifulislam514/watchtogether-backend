@@ -7,7 +7,6 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
 from django.conf import settings
-from django.db import transaction
 from .models import Video
 from .serializers import VideoSerializer, VideoUploadSerializer, VideoUpdateSerializer
 from .services import upload_to_r2
@@ -73,7 +72,7 @@ class VideoListCreateView(APIView):
         video.status       = 'processing'
         video.save()
 
-        transaction.on_commit(lambda: transcode_video.delay(str(video.id)))
+        transcode_video.delay(str(video.id))
 
         return Response(
             VideoSerializer(video, context={'request': request}).data,

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -o errexit
 
-# Start Celery worker in background
-celery -A core worker --loglevel=info --concurrency=1 &
+echo "==> Starting Celery worker..."
+# ✅ Redirect stdout+stderr to Render's log capture
+celery -A core worker --loglevel=info --concurrency=1 2>&1 &
+CELERY_PID=$!
+echo "==> Celery PID: $CELERY_PID"
 
-# Start Daphne in foreground
+echo "==> Starting Daphne..."
 daphne -b 0.0.0.0 -p $PORT core.asgi:application
