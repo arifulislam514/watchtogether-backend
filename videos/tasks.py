@@ -10,6 +10,9 @@ from celery import shared_task
 from django.conf import settings
 from botocore.config import Config
 from .models import Video
+import shutil as _shutil
+FFMPEG  = '/opt/FFMPEG/FFMPEG'  if _shutil.which('/opt/FFMPEG/FFMPEG')  else 'FFMPEG'
+FFPROBE = '/opt/FFMPEG/FFPROBE' if _shutil.which('/opt/FFMPEG/FFPROBE') else 'FFPROBE'
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +106,9 @@ def upload_hls_files(video_id, temp_dir):
 
 
 def get_video_duration(input_path):
-    """Uses ffprobe to get video duration in seconds."""
+    """Uses FFPROBE to get video duration in seconds."""
     result = subprocess.run([
-        'ffprobe', '-v', 'error',
+        'FFPROBE', '-v', 'error',
         '-show_entries', 'format=duration',
         '-of', 'default=noprint_wrappers=1:nokey=1',
         input_path
@@ -119,7 +122,7 @@ def get_video_duration(input_path):
 def get_audio_streams(input_path):
     """Returns list of audio streams with index, language, and title."""
     result = subprocess.run([
-        'ffprobe', '-v', 'error',
+        'FFPROBE', '-v', 'error',
         '-select_streams', 'a',
         '-show_entries', 'stream=index:stream_tags=language,title',
         '-of', 'json',
@@ -139,7 +142,7 @@ def get_subtitle_streams(input_path):
     TEXT_SUBTITLE_CODECS = {'subrip', 'ass', 'ssa', 'mov_text', 'webvtt', 'srt', 'text'}
 
     result = subprocess.run([
-        'ffprobe', '-v', 'error',
+        'FFPROBE', '-v', 'error',
         '-select_streams', 's',
         '-show_entries', 'stream=index,codec_name:stream_tags=language,title',
         '-of', 'json',
@@ -178,7 +181,7 @@ def transcode_audio_renditions(input_path, output_dir, audio_streams):
         os.makedirs(audio_dir, exist_ok=True)
 
         cmd = [
-            'ffmpeg', '-i', input_path,
+            'FFMPEG', '-i', input_path,
             '-map', f'0:a:{i}',
             '-c:a', 'aac', '-b:a', '128k',
             '-f', 'hls',
@@ -225,7 +228,7 @@ def transcode_subtitle_renditions(input_path, output_dir, subtitle_streams, dura
         vtt_path = os.path.join(sub_dir, 'subtitle.vtt')
 
         cmd = [
-            'ffmpeg', '-i', input_path,
+            'FFMPEG', '-i', input_path,
             '-map', f'0:s:{i}',
             '-c:s', 'webvtt',
             vtt_path, '-y'
@@ -380,7 +383,7 @@ def transcode_video(self, video_id):
                 os.makedirs(res_dir, exist_ok=True)
 
                 cmd = [
-                    'ffmpeg', '-i', input_path,
+                    'FFMPEG', '-i', input_path,
                     '-map', '0:v:0',
                     '-vf', f'scale={size}',
                     '-c:v', 'libx264',
@@ -405,7 +408,7 @@ def transcode_video(self, video_id):
 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0:
-                    raise Exception(f'FFmpeg failed for {label}: {result.stderr[-500:]}')
+                    raise Exception(f'FFMPEG failed for {label}: {result.stderr[-500:]}')
 
                 logger.info(f"Transcoded {label} successfully")
 
