@@ -10,9 +10,13 @@ from celery import shared_task
 from django.conf import settings
 from botocore.config import Config
 from .models import Video
+import os as _os
+
 import shutil as _shutil
-FFMPEG  = '/opt/FFMPEG/FFMPEG'  if _shutil.which('/opt/FFMPEG/FFMPEG')  else 'FFMPEG'
-FFPROBE = '/opt/FFMPEG/FFPROBE' if _shutil.which('/opt/FFMPEG/FFPROBE') else 'FFPROBE'
+_HOME_FFMPEG  = _os.path.join(_os.path.expanduser('~'), 'ffmpeg', 'ffmpeg')
+_HOME_FFPROBE = _os.path.join(_os.path.expanduser('~'), 'ffmpeg', 'ffprobe')
+FFMPEG  = _HOME_FFMPEG  if _os.path.isfile(_HOME_FFMPEG)  else 'ffmpeg'
+FFPROBE = _HOME_FFPROBE if _os.path.isfile(_HOME_FFPROBE) else 'ffprobe'
 
 logger = logging.getLogger(__name__)
 
