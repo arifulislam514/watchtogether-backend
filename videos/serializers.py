@@ -55,6 +55,7 @@ class VideoSerializer(serializers.ModelSerializer):
             'master_url', 'url_360p', 'url_720p', 'url_1080p',
             'file_size', 'duration', 'format',
             'status', 'is_ready',
+            'progress', 'stage',
             'uploaded_at',
         )
         read_only_fields = (

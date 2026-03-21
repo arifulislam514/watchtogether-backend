@@ -54,6 +54,7 @@ class RoomConsumer(AsyncWebsocketConsumer):
         elif event == 'NETWORK_WAIT':   await self.handle_network_wait(data, user_id, user_name)
         elif event == 'NETWORK_READY':  await self.handle_network_ready(data, user_id, user_name)
         elif event == 'VIDEO_SELECTED': await self.handle_video_selected(data, user_id, user_name)
+        elif event == 'LEAVE_ROOM':     await self.handle_leave_room(data, user_id, user_name)
         elif event == 'SYNC_STATE':     await self.handle_sync_state(data, user_id, user_name)
         elif event in ('WEBRTC_OFFER', 'WEBRTC_ANSWER', 'WEBRTC_ICE'):
             await self.handle_webrtc_signal(data, user_id, user_name)
@@ -110,6 +111,14 @@ class RoomConsumer(AsyncWebsocketConsumer):
             'user_id': user_id, 'user_name': user_name,
         })
 
+    async def handle_leave_room(self, data, user_id, user_name):
+        """Member voluntarily leaving — broadcast MEMBER_LEFT to others"""
+        await self.channel_layer.group_send(self.room_group, {
+            'type':      'member_left',
+            'user_id':   user_id,
+            'user_name': user_name,
+        })
+
     async def handle_video_selected(self, data, user_id, user_name):
         await self.channel_layer.group_send(self.room_group, {
             'type': 'video_selected', 'sender_id': user_id, 'user_name': user_name,
@@ -136,6 +145,13 @@ class RoomConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'type': 'MEMBER_JOINED',
             'user_id': event['user_id'], 'user_name': event['user_name'],
+        }))
+
+    async def member_left(self, event):
+        await self.send(text_data=json.dumps({
+            'type':      'MEMBER_LEFT',
+            'user_id':   event['user_id'],
+            'user_name': event['user_name'],
         }))
 
     async def member_disconnected(self, event):

@@ -345,7 +345,9 @@ def transcode_video(self, video_id):
         video = Video.objects.get(id=video_id)
         logger.info(f"Video found: {video.title}")
 
-        video.status = 'processing'
+        video.status   = 'processing'
+        video.progress = 5
+        video.stage    = 'Starting...'
         video.save()
 
         temp_dir   = tempfile.mkdtemp(prefix=f'transcode_{video_id}_')
@@ -415,6 +417,11 @@ def transcode_video(self, video_id):
                     raise Exception(f'ffmpeg failed for {label}: {result.stderr[-500:]}')
 
                 logger.info(f"Transcoded {label} successfully")
+                # ✅ Update progress after each resolution
+                _prog = {'360p': 25, '720p': 50, '1080p': 75}
+                video.progress = _prog.get(label, video.progress)
+                video.stage    = f'Transcoding {label}...'
+                video.save(update_fields=['progress', 'stage'])
 
             # ── Step 5: Audio renditions (multi-audio only) ────────
             audio_renditions = []
@@ -437,6 +444,9 @@ def transcode_video(self, video_id):
             )
 
             # ── Step 8: Upload all HLS files to storage ────────────
+            video.progress = 85
+            video.stage    = 'Uploading to storage...'
+            video.save(update_fields=['progress', 'stage'])
             logger.info("Uploading HLS files to storage...")
             master_url, resolution_urls = upload_hls_files(video_id, output_dir)
 
@@ -445,7 +455,9 @@ def transcode_video(self, video_id):
             video.url_360p   = resolution_urls['360p']
             video.url_720p   = resolution_urls['720p']
             video.url_1080p  = resolution_urls['1080p']
-            video.status     = 'ready'
+            video.status   = 'ready'
+            video.progress = 100
+            video.stage    = 'Complete'
             video.save()
 
             logger.info(f"Transcoding complete for video: {video_id}")

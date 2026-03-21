@@ -32,6 +32,8 @@ class Video(models.Model):
     format       = models.CharField(max_length=10, blank=True)  # mp4, mkv
 
     status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default='uploading')
+    progress     = models.IntegerField(default=0)   # 0-100 percent
+    stage        = models.CharField(max_length=50, blank=True)  # current processing stage
     uploaded_at  = models.DateTimeField(auto_now_add=True)
     updated_at   = models.DateTimeField(auto_now=True)
 
