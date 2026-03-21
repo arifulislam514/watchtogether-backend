@@ -470,11 +470,28 @@ def transcode_video(self, video_id):
         logger.error(f"Video not found in DB: {video_id}")
 
     except Exception as exc:
-        logger.error(f"Transcoding failed: {exc}")
+        logger.error(f"Transcoding failed: {exc}", exc_info=True)
         try:
             video = Video.objects.get(id=video_id)
-            video.status = 'failed'
+            video.status   = 'failed'
+            video.progress = 0
+            video.stage    = 'Failed'
             video.save()
-        except Video.DoesNotExist:
+        except Exception:
             pass
-        raise self.retry(exc=exc, countdown=60)
+        # ✅ Only retry if running as a real Celery task (has request context)
+        if hasattr(self, 'request') and self.request.id:
+            raise self.retry(exc=exc, countdown=60)
+    
+def transcode_video_sync(video_id):
+    """
+    Runs transcoding directly — no Celery needed.
+    Called from background thread in views.py.
+    """
+    logger.info(f"[Sync] Starting transcode for video: {video_id}")
+    try:
+        # ✅ Pass None as 'self' since bind=True but we have no Celery task instance
+        transcode_video.run(None, video_id)
+    except Exception as exc:
+        logger.error(f"[Sync] Transcode failed for {video_id}: {exc}", exc_info=True)
+        

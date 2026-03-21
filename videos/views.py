@@ -1,6 +1,8 @@
 # videos/views.py
 import os
 import shutil
+import threading
+import logging
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,34 +12,41 @@ from django.conf import settings
 from .models import Video
 from .serializers import VideoSerializer, VideoUploadSerializer, VideoUpdateSerializer
 from .services import upload_to_r2
-from .tasks import transcode_video
+
+logger = logging.getLogger(__name__)
 
 
 def delete_video_files(video):
-    """Delete all video files — R2 or local."""
-    import os, shutil
-    from videos.services import get_r2_client
-
     is_local = settings.R2_ENDPOINT_URL.startswith('https://your-account')
-
     if is_local:
         video_dir = os.path.join(settings.MEDIA_ROOT, 'videos', str(video.id))
         if os.path.exists(video_dir):
             shutil.rmtree(video_dir)
     else:
-        # Delete all R2 objects with this video's prefix
+        from .services import get_r2_client
         client = get_r2_client()
         prefix = f"videos/{video.id}/"
-        response = client.list_objects_v2(
-            Bucket=settings.R2_BUCKET_NAME,
-            Prefix=prefix
-        )
+        response = client.list_objects_v2(Bucket=settings.R2_BUCKET_NAME, Prefix=prefix)
         objects = response.get('Contents', [])
         if objects:
             client.delete_objects(
                 Bucket=settings.R2_BUCKET_NAME,
                 Delete={'Objects': [{'Key': o['Key']} for o in objects]}
             )
+
+def run_transcode_in_thread(video_id):
+    def _run():
+        try:
+            logger.info(f"[Thread] Starting transcode: {video_id}")
+            from videos.tasks import transcode_video_sync  # ✅ use sync version
+            transcode_video_sync(video_id)
+            logger.info(f"[Thread] Transcode complete: {video_id}")
+        except Exception as e:
+            logger.error(f"[Thread] Transcode failed: {e}", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
 
 class VideoListCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -70,9 +79,12 @@ class VideoListCreateView(APIView):
 
         video.original_url = original_url
         video.status       = 'processing'
+        video.progress     = 5
+        video.stage        = 'Starting...'
         video.save()
 
-        transcode_video.delay(str(video.id))
+        # ✅ Run in background thread — no Celery needed
+        run_transcode_in_thread(str(video.id))
 
         return Response(
             VideoSerializer(video, context={'request': request}).data,
@@ -100,8 +112,8 @@ class VideoDetailView(APIView):
 
     def delete(self, request, pk):
         video = self.get_object(pk, request.user)
-        # ✅ Delete all files from disk before removing DB record
         delete_video_files(video)
         video.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
     
