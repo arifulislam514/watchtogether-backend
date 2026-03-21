@@ -394,6 +394,8 @@ def transcode_video(self, video_id):
                     '-vf', f'scale={size}',
                     '-c:v', 'libx264',
                     '-b:v', vbitrate,
+                    '-preset', 'ultrafast',
+                    '-threads', '1',
                 ]
 
                 if is_multi_audio:

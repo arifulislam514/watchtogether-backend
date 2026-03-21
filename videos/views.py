@@ -38,13 +38,13 @@ def run_transcode_in_thread(video_id):
     def _run():
         try:
             logger.info(f"[Thread] Starting transcode: {video_id}")
-            from videos.tasks import transcode_video_sync  # ✅ use sync version
+            from videos.tasks import transcode_video_sync
             transcode_video_sync(video_id)
             logger.info(f"[Thread] Transcode complete: {video_id}")
         except Exception as e:
             logger.error(f"[Thread] Transcode failed: {e}", exc_info=True)
 
-    t = threading.Thread(target=_run, daemon=True)
+    t = threading.Thread(target=_run, daemon=False)  # ✅ False — survives Daphne restart
     t.start()
 
 
