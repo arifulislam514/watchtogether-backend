@@ -13,10 +13,10 @@ from .models import Video
 import os as _os
 
 import shutil as _shutil
-_HOME_FFMPEG  = _os.path.join(_os.path.expanduser('~'), 'ffmpeg', 'ffmpeg')
-_HOME_FFPROBE = _os.path.join(_os.path.expanduser('~'), 'ffmpeg', 'ffprobe')
-FFMPEG  = _HOME_FFMPEG  if _os.path.isfile(_HOME_FFMPEG)  else 'ffmpeg'
-FFPROBE = _HOME_FFPROBE if _os.path.isfile(_HOME_FFPROBE) else 'ffprobe'
+_BIN_FFMPEG  = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'bin', 'ffmpeg')
+_BIN_FFPROBE = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'bin', 'ffprobe')
+FFMPEG  = _BIN_FFMPEG  if _os.path.isfile(_BIN_FFMPEG)  else 'ffmpeg'
+FFPROBE = _BIN_FFPROBE if _os.path.isfile(_BIN_FFPROBE) else 'ffprobe'
 
 logger = logging.getLogger(__name__)
 
@@ -466,4 +466,3 @@ def transcode_video(self, video_id):
         except Video.DoesNotExist:
             pass
         raise self.retry(exc=exc, countdown=60)
-    
