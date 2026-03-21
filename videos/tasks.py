@@ -482,16 +482,12 @@ def transcode_video(self, video_id):
         # ✅ Only retry if running as a real Celery task (has request context)
         if hasattr(self, 'request') and self.request.id:
             raise self.retry(exc=exc, countdown=60)
+        
     
 def transcode_video_sync(video_id):
-    """
-    Runs transcoding directly — no Celery needed.
-    Called from background thread in views.py.
-    """
     logger.info(f"[Sync] Starting transcode for video: {video_id}")
     try:
-        # ✅ Pass None as 'self' since bind=True but we have no Celery task instance
-        transcode_video.run(None, video_id)
+        transcode_video.run(video_id)  # ✅ .run() already binds self
     except Exception as exc:
         logger.error(f"[Sync] Transcode failed for {video_id}: {exc}", exc_info=True)
         
