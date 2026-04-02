@@ -116,4 +116,86 @@ class VideoDetailView(APIView):
         video.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
     
+
+class VideoPresignedUploadView(APIView):
+    """
+    Step 1: Frontend requests a presigned URL
+    Step 2: Frontend uploads directly to R2
+    Step 3: Frontend calls VideoConfirmUploadView to trigger transcoding
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        filename    = request.data.get('filename', '')
+        file_size   = int(request.data.get('file_size', 0))
+        title       = request.data.get('title', filename.rsplit('.', 1)[0])
+        description = request.data.get('description', '')
+
+        if not filename:
+            return Response({'error': 'filename required'}, status=400)
+
+        ext = filename.split('.')[-1].lower()
+        if ext not in ['mp4', 'mkv']:
+            return Response({'error': 'Only mp4 and mkv allowed'}, status=400)
+
+        if file_size > 4 * 1024 * 1024 * 1024:
+            return Response({'error': 'File must be under 4GB'}, status=400)
+
+        # Create video record immediately
+        video = Video.objects.create(
+            owner=request.user,
+            title=title,
+            description=description,
+            file_size=file_size,
+            format=ext,
+            status='uploading',
+            progress=0,
+            stage='Waiting for upload...',
+        )
+
+        key = f"videos/{video.id}/original.{ext}"
+
+        # Generate presigned URL — valid for 2 hours (large files need time)
+        from .services import get_r2_client
+        client = get_r2_client()
+        presigned_url = client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket':      settings.R2_BUCKET_NAME,
+                'Key':         key,
+                'ContentType': 'video/mp4' if ext == 'mp4' else 'video/x-matroska',
+            },
+            ExpiresIn=7200,
+        )
+
+        return Response({
+            'video_id':     str(video.id),
+            'upload_url':   presigned_url,
+            'key':          key,
+        }, status=201)
+
+
+class VideoConfirmUploadView(APIView):
+    """
+    Called after frontend finishes uploading directly to R2.
+    Sets original_url and kicks off transcoding.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, video_id):
+        video = get_object_or_404(Video, id=video_id, owner=request.user)
+
+        if video.status != 'uploading':
+            return Response({'error': 'Video not in uploading state'}, status=400)
+
+        key = f"videos/{video.id}/original.{video.format}"
+        video.original_url = f"{settings.R2_PUBLIC_URL}/{key}"
+        video.status       = 'processing'
+        video.progress     = 5
+        video.stage        = 'Starting...'
+        video.save()
+
+        run_transcode_in_thread(str(video.id))
+
+        return Response(VideoSerializer(video).data)
     
