@@ -1,7 +1,6 @@
 # videos/views.py
 import os
 import shutil
-import threading
 import logging
 from rest_framework import permissions, status
 from rest_framework.response import Response
@@ -12,6 +11,8 @@ from django.conf import settings
 from .models import Video
 from .serializers import VideoSerializer, VideoUploadSerializer, VideoUpdateSerializer
 from .services import upload_to_r2
+from django.db import transaction
+from .tasks import transcode_video
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +34,6 @@ def delete_video_files(video):
                 Bucket=settings.R2_BUCKET_NAME,
                 Delete={'Objects': [{'Key': o['Key']} for o in objects]}
             )
-
-def run_transcode_in_thread(video_id):
-    def _run():
-        try:
-            logger.info(f"[Thread] Starting transcode: {video_id}")
-            from videos.tasks import transcode_video_sync
-            transcode_video_sync(video_id)
-            logger.info(f"[Thread] Transcode complete: {video_id}")
-        except Exception as e:
-            logger.error(f"[Thread] Transcode failed: {e}", exc_info=True)
-
-    t = threading.Thread(target=_run, daemon=False)  # ✅ False — survives Daphne restart
-    t.start()
 
 
 class VideoListCreateView(APIView):
@@ -83,8 +71,8 @@ class VideoListCreateView(APIView):
         video.stage        = 'Starting...'
         video.save()
 
-        # ✅ Run in background thread — no Celery needed
-        run_transcode_in_thread(str(video.id))
+        # Trigger Celery task after DB commit
+        transaction.on_commit(lambda: transcode_video.delay(str(video.id)))
 
         return Response(
             VideoSerializer(video, context={'request': request}).data,
@@ -195,7 +183,7 @@ class VideoConfirmUploadView(APIView):
         video.stage        = 'Starting...'
         video.save()
 
-        run_transcode_in_thread(str(video.id))
+        transaction.on_commit(lambda: transcode_video.delay(str(video.id)))
 
         return Response(VideoSerializer(video).data)
     
