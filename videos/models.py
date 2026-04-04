@@ -35,7 +35,7 @@ class Video(models.Model):
     progress     = models.IntegerField(default=0)   # 0-100 percent
     stage        = models.CharField(max_length=50, blank=True)  # current processing stage
     uploaded_at  = models.DateTimeField(auto_now_add=True)
-    updated_at   = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True)  # already there — confirm this exists
 
     class Meta:
         ordering = ['-uploaded_at']
