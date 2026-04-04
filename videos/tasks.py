@@ -94,6 +94,7 @@ def upload_hls_files(video_id, temp_dir):
         master_url = f"/media/videos/{video_id}/hls/master.m3u8"
         urls = {
             '360p':  f"/media/videos/{video_id}/hls/360p/playlist.m3u8",
+            '480p':  f"/media/videos/{video_id}/hls/480p/playlist.m3u8",
             '720p':  f"/media/videos/{video_id}/hls/720p/playlist.m3u8",
             '1080p': f"/media/videos/{video_id}/hls/1080p/playlist.m3u8",
         }
@@ -102,6 +103,7 @@ def upload_hls_files(video_id, temp_dir):
         master_url = f"{base}/videos/{video_id}/hls/master.m3u8"
         urls = {
             '360p':  f"{base}/videos/{video_id}/hls/360p/playlist.m3u8",
+            '480p':  f"{base}/videos/{video_id}/hls/480p/playlist.m3u8",
             '720p':  f"{base}/videos/{video_id}/hls/720p/playlist.m3u8",
             '1080p': f"{base}/videos/{video_id}/hls/1080p/playlist.m3u8",
         }
@@ -378,13 +380,22 @@ def transcode_video(self, video_id):
             )
 
             # ── Step 4: Transcode video resolutions ────────────────
+            ALL_RESOLUTIONS = {
+                '360p':  ('640x360',   '800k'),
+                '480p':  ('854x480',   '1200k'),
+                '720p':  ('1280x720',  '2500k'),
+                '1080p': ('1920x1080', '5000k'),
+            }
+            # Use qualities saved on video, default = 360p+480p+720p (no 1080p)
+            selected = video.qualities if video.qualities else ['360p', '480p', '720p']
             resolutions = [
-                ('360p',  '640x360',   '800k'),
-                ('720p',  '1280x720',  '2500k'),
-                ('1080p', '1920x1080', '5000k'),
+                (q, ALL_RESOLUTIONS[q][0], ALL_RESOLUTIONS[q][1])
+                for q in ['360p', '480p', '720p', '1080p']
+                if q in selected and q in ALL_RESOLUTIONS
             ]
+            total_res = len(resolutions)
 
-            for label, size, vbitrate in resolutions:
+            for idx, (label, size, vbitrate) in enumerate(resolutions):
                 res_dir = os.path.join(output_dir, label)
                 os.makedirs(res_dir, exist_ok=True)
 
@@ -419,9 +430,8 @@ def transcode_video(self, video_id):
                     raise Exception(f'ffmpeg failed for {label}: {result.stderr[-500:]}')
 
                 logger.info(f"Transcoded {label} successfully")
-                # ✅ Update progress after each resolution
-                _prog = {'360p': 25, '720p': 50, '1080p': 75}
-                video.progress = _prog.get(label, video.progress)
+                # ✅ Dynamic progress based on how many resolutions selected
+                video.progress = int((idx + 1) / total_res * 75)
                 video.stage    = f'Transcoding {label}...'
                 video.save(update_fields=['progress', 'stage'])
 
@@ -454,9 +464,10 @@ def transcode_video(self, video_id):
 
             # ── Step 9: Update Video model ─────────────────────────
             video.master_url = master_url
-            video.url_360p   = resolution_urls['360p']
-            video.url_720p   = resolution_urls['720p']
-            video.url_1080p  = resolution_urls['1080p']
+            video.url_360p  = resolution_urls.get('360p', '')
+            video.url_480p  = resolution_urls.get('480p', '')
+            video.url_720p  = resolution_urls.get('720p', '')
+            video.url_1080p = resolution_urls.get('1080p', '')
             video.status   = 'ready'
             video.progress = 100
             video.stage    = 'Complete'

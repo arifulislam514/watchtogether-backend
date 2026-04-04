@@ -23,8 +23,10 @@ class Video(models.Model):
     # HLS transcoded versions — filled after Celery task completes
     master_url   = models.URLField(blank=True)  # master.m3u8 — this is what the player loads
     url_360p     = models.URLField(blank=True)
+    url_480p     = models.URLField(blank=True)
     url_720p     = models.URLField(blank=True)
     url_1080p    = models.URLField(blank=True)
+    qualities    = models.JSONField(default=list)  # e.g. ['360p','480p','720p']
 
     # Metadata
     file_size    = models.BigIntegerField(default=0)  # bytes

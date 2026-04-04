@@ -130,6 +130,15 @@ class VideoPresignedUploadView(APIView):
             return Response({'error': 'File must be under 4GB'}, status=400)
 
         # Create video record immediately
+        # Validate qualities — default is 360p+480p+720p (1080p off by default)
+        raw_qualities = request.data.getlist('qualities') or request.data.get('qualities', [])
+        if isinstance(raw_qualities, str):
+            import json
+            try: raw_qualities = json.loads(raw_qualities)
+            except: raw_qualities = []
+        allowed_q = {'360p', '480p', '720p', '1080p'}
+        qualities = [q for q in raw_qualities if q in allowed_q] or ['360p', '480p', '720p']
+
         video = Video.objects.create(
             owner=request.user,
             title=title,
@@ -139,6 +148,7 @@ class VideoPresignedUploadView(APIView):
             status='uploading',
             progress=0,
             stage='Waiting for upload...',
+            qualities=qualities,
         )
 
         key = f"videos/{video.id}/original.{ext}"

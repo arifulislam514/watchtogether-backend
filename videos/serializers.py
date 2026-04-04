@@ -52,14 +52,15 @@ class VideoSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'title', 'description',
             'owner', 'owner_name',
-            'master_url', 'url_360p', 'url_720p', 'url_1080p',
+            'master_url', 'url_360p', 'url_480p', 'url_720p', 'url_1080p',
+            'qualities',
             'file_size', 'duration', 'format',
             'status', 'is_ready',
             'progress', 'stage',
             'uploaded_at',
         )
         read_only_fields = (
-            'id', 'owner', 'master_url', 'url_360p',
+            'id', 'owner', 'master_url', 'url_360p', 'url_480p',
             'url_720p', 'url_1080p', 'status', 'uploaded_at'
         )
 
