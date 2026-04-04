@@ -131,11 +131,13 @@ class VideoPresignedUploadView(APIView):
 
         # Create video record immediately
         # Validate qualities — default is 360p+480p+720p (1080p off by default)
-        raw_qualities = request.data.getlist('qualities') or request.data.get('qualities', [])
+        raw_qualities = request.data.get('qualities', ['360p', '480p', '720p'])
         if isinstance(raw_qualities, str):
             import json
             try: raw_qualities = json.loads(raw_qualities)
-            except: raw_qualities = []
+            except: raw_qualities = ['360p', '480p', '720p']
+        if not isinstance(raw_qualities, list):
+            raw_qualities = ['360p', '480p', '720p']
         allowed_q = {'360p', '480p', '720p', '1080p'}
         qualities = [q for q in raw_qualities if q in allowed_q] or ['360p', '480p', '720p']
 
