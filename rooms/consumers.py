@@ -56,6 +56,8 @@ class RoomConsumer(AsyncWebsocketConsumer):
         elif event == 'VIDEO_SELECTED': await self.handle_video_selected(data, user_id, user_name)
         elif event == 'LEAVE_ROOM':     await self.handle_leave_room(data, user_id, user_name)
         elif event == 'SYNC_STATE':     await self.handle_sync_state(data, user_id, user_name)
+        elif event == 'VOICE_JOIN':    await self.handle_voice_join(data, user_id, user_name)
+        elif event == 'VOICE_LEAVE':   await self.handle_voice_leave(data, user_id, user_name)
         elif event in ('WEBRTC_OFFER', 'WEBRTC_ANSWER', 'WEBRTC_ICE'):
             await self.handle_webrtc_signal(data, user_id, user_name)
 
@@ -131,6 +133,22 @@ class RoomConsumer(AsyncWebsocketConsumer):
             'sender_id':  user_id,
             'timestamp':  data.get('timestamp', 0),
             'is_playing': data.get('is_playing', False),
+        })
+
+    async def handle_voice_join(self, data, user_id, user_name):
+        """Broadcast that a user joined the voice call — others create peer connections"""
+        await self.channel_layer.group_send(self.room_group, {
+            'type':      'voice_join',
+            'user_id':   user_id,
+            'user_name': user_name,
+        })
+
+    async def handle_voice_leave(self, data, user_id, user_name):
+        """Broadcast that a user left the voice call"""
+        await self.channel_layer.group_send(self.room_group, {
+            'type':      'voice_leave',
+            'user_id':   user_id,
+            'user_name': user_name,
         })
 
     async def handle_webrtc_signal(self, data, user_id, user_name):
@@ -219,6 +237,20 @@ class RoomConsumer(AsyncWebsocketConsumer):
             'sender_id':  event['sender_id'],
             'timestamp':  event['timestamp'],
             'is_playing': event['is_playing'],
+        }))
+
+    async def voice_join(self, event):
+        await self.send(text_data=json.dumps({
+            'type':      'VOICE_JOIN',
+            'user_id':   event['user_id'],
+            'user_name': event['user_name'],
+        }))
+
+    async def voice_leave(self, event):
+        await self.send(text_data=json.dumps({
+            'type':      'VOICE_LEAVE',
+            'user_id':   event['user_id'],
+            'user_name': event['user_name'],
         }))
 
     async def webrtc_signal(self, event):
