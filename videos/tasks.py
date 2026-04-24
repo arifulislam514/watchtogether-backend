@@ -12,7 +12,6 @@ from botocore.config import Config
 from .models import Video
 import os as _os
 
-import shutil as _shutil
 _BIN_FFMPEG  = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'bin', 'ffmpeg')
 _BIN_FFPROBE = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'bin', 'ffprobe')
 FFMPEG  = _BIN_FFMPEG  if _os.path.isfile(_BIN_FFMPEG)  else 'ffmpeg'
@@ -268,7 +267,7 @@ def transcode_subtitle_renditions(input_path, output_dir, subtitle_streams, dura
     return renditions
 
 
-def build_master_playlist(output_dir, audio_renditions, subtitle_renditions, has_embedded_audio):
+def build_master_playlist(output_dir, audio_renditions, subtitle_renditions, has_embedded_audio, selected_resolutions=None):
     """
     Builds master.m3u8 with:
     - #EXT-X-MEDIA entries for audio renditions (when multi-audio)
@@ -306,15 +305,29 @@ def build_master_playlist(output_dir, audio_renditions, subtitle_renditions, has
             )
         lines.append('')
 
-    # ── Video stream entries ───────────────────────────────────
-    streams = [
-        ('360p',  800_000,   '640x360'),
-        ('720p',  2_500_000, '1280x720'),
-        ('1080p', 5_000_000, '1920x1080'),
+    # ── Video stream entries — use actual transcoded resolutions ──
+    BANDWIDTH_MAP = {
+        '360p':  800_000,
+        '480p':  1_200_000,
+        '720p':  2_500_000,
+        '1080p': 5_000_000,
+    }
+    RESOLUTION_MAP = {
+        '360p':  '640x360',
+        '480p':  '854x480',
+        '720p':  '1280x720',
+        '1080p': '1920x1080',
+    }
+    # Use actual transcoded list — avoids referencing playlists that don't exist
+    streams_to_use = selected_resolutions or [
+        ('360p', '640x360', '800k'), ('720p', '1280x720', '2500k'), ('1080p', '1920x1080', '5000k')
     ]
 
-    for label, bandwidth, resolution in streams:
-        attrs = [f'BANDWIDTH={bandwidth}', f'RESOLUTION={resolution}']
+    for label, _size, _vbitrate in streams_to_use:
+        attrs = [
+            f'BANDWIDTH={BANDWIDTH_MAP.get(label, 1_000_000)}',
+            f'RESOLUTION={RESOLUTION_MAP.get(label, "1280x720")}',
+        ]
         if has_audio_group:
             attrs.append('AUDIO="audio"')
         if has_sub_group:
@@ -453,6 +466,7 @@ def transcode_video(self, video_id):
                 audio_renditions,
                 subtitle_renditions,
                 has_embedded_audio=not is_multi_audio,
+                selected_resolutions=resolutions,
             )
 
             # ── Step 8: Upload all HLS files to storage ────────────

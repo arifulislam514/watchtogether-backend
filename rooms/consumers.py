@@ -32,12 +32,16 @@ class RoomConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group'):
-            # ✅ Broadcast disconnect — frontend pauses everyone
-            await self.channel_layer.group_send(self.room_group, {
-                'type':      'member_disconnected',
-                'user_id':   str(self.user.id),
-                'user_name': self.user.name,
-            })
+            # ✅ Only broadcast DISCONNECTED if user is still a member
+            # If they sent LEAVE_ROOM first, they're already removed — skip disconnect broadcast
+            # This prevents graceful leave from pausing the video for everyone
+            still_member = await self.check_membership()
+            if still_member:
+                await self.channel_layer.group_send(self.room_group, {
+                    'type':      'member_disconnected',
+                    'user_id':   str(self.user.id),
+                    'user_name': self.user.name,
+                })
             await self.channel_layer.group_discard(self.room_group, self.channel_name)
 
     async def receive(self, text_data):
@@ -52,8 +56,9 @@ class RoomConsumer(AsyncWebsocketConsumer):
         elif event == 'PAUSE':          await self.handle_pause(data, user_id, user_name)
         elif event == 'SEEK':           await self.handle_seek(data, user_id, user_name)
         elif event == 'NETWORK_WAIT':   await self.handle_network_wait(data, user_id, user_name)
-        elif event == 'NETWORK_READY':  await self.handle_network_ready(data, user_id, user_name)
+        elif event == 'NETWORK_RESUME': await self.handle_network_ready(data, user_id, user_name)
         elif event == 'VIDEO_SELECTED': await self.handle_video_selected(data, user_id, user_name)
+        elif event == 'SYNC_TIME':     await self.handle_sync_time(data, user_id, user_name)
         elif event == 'LEAVE_ROOM':     await self.handle_leave_room(data, user_id, user_name)
         elif event == 'SYNC_STATE':     await self.handle_sync_state(data, user_id, user_name)
         elif event == 'VOICE_JOIN':    await self.handle_voice_join(data, user_id, user_name)
@@ -113,6 +118,13 @@ class RoomConsumer(AsyncWebsocketConsumer):
             'user_id': user_id, 'user_name': user_name,
         })
 
+    async def handle_sync_time(self, data, user_id, user_name):
+        await self.channel_layer.group_send(self.room_group, {
+            'type':      'sync_time',
+            'sender_id': user_id,
+            'timestamp': data.get('timestamp', 0),
+        })
+
     async def handle_leave_room(self, data, user_id, user_name):
         """Member voluntarily leaving — broadcast MEMBER_LEFT to others"""
         await self.channel_layer.group_send(self.room_group, {
@@ -163,6 +175,13 @@ class RoomConsumer(AsyncWebsocketConsumer):
         await self.send(text_data=json.dumps({
             'type': 'MEMBER_JOINED',
             'user_id': event['user_id'], 'user_name': event['user_name'],
+        }))
+
+    async def sync_time(self, event):
+        await self.send(text_data=json.dumps({
+            'type':      'SYNC_TIME',
+            'sender_id': event['sender_id'],
+            'timestamp': event['timestamp'],
         }))
 
     async def member_left(self, event):
@@ -271,10 +290,16 @@ class RoomConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def toggle_ready(self):
-        member = RoomMember.objects.get(room_id=self.room_id, user=self.user)
-        member.is_ready = not member.is_ready
-        member.save()
-        all_ready = not RoomMember.objects.filter(room_id=self.room_id, is_ready=False).exists()
+        from django.db import transaction
+        with transaction.atomic():
+            member = RoomMember.objects.select_for_update().get(
+                room_id=self.room_id, user=self.user
+            )
+            member.is_ready = not member.is_ready
+            member.save()
+            all_ready = not RoomMember.objects.filter(
+                room_id=self.room_id, is_ready=False
+            ).exists()
         return member.is_ready, all_ready
 
     @database_sync_to_async
